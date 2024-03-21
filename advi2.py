@@ -28,13 +28,13 @@ class ModelParam2(nn.Module):
 
         #     self.vparams = torch.stack([self.mean, self.L.view(-1)])
 
-        # self.vparams.requires_grad = True
+        self.vparams.requires_grad = True
 
         self.size = self.vparams.size(0)
 
     def dist(self):
         if self.mode == "meanfield":
-            return Normal(self.mean, self.log_std.exp())
+            return Normal(self.vparams[0], self.vparams[1].exp() + 1e-6)
         # elif self.mode == "fullrank":
         #     return MultivariateNormal(self.mean, self.L @ self.L.t())
     
@@ -109,7 +109,7 @@ class ADVI2:
         total.requires_grad = False
         # clips the gradient to avoid numerical instability
         total = torch.clamp(total, -10, 10)
-        print(total.abs().mean())
+        #print(total.abs().mean())
         return total
 
     def zeta_from_sample(self, sample):
@@ -122,14 +122,13 @@ class ADVI2:
     def entropy(self):
         return self.model_params.dist().entropy().sum()
 
-    def compute_elbo(self, x):
+    def compute_elbo(self, batch, full_data_size):
         elbo = 0
         for i in range(self.num_samples):
             sample = torch.randn(self.advi_dim)
-            with torch.no_grad():
-                zeta = self.zeta_from_sample(sample)  
-                theta = self.model.theta_from_zeta(zeta)
-                elbo += self.model.log_prob(x, theta, x.shape[0]) + self.model.log_det(zeta) + self.entropy()
+            zeta = self.zeta_from_sample(sample)  
+            theta = self.model.theta_from_zeta(zeta)
+            elbo += self.model.log_prob(batch, theta, full_data_size) + self.model.log_det(zeta) + self.entropy()
 
         elbo /= self.num_samples
         return elbo
@@ -142,6 +141,13 @@ class ADVI2:
             raise NotImplementedError("Only SGD is implemented for now")
     
     def fit(self, x, method = "SGD", plotting=True):
+
+        if method == "SGD":
+            optimizer = torch.optim.SGD([self.model_params.vparams], lr=self.lr)
+        elif method == "Adam":
+            optimizer = torch.optim.Adam([self.model_params.vparams], lr=self.lr)
+        else:
+            raise ValueError("Method should be either 'SGD' or 'Adam'")
         
         diff_elbo = np.inf
         last_elbo = -np.inf
@@ -161,34 +167,42 @@ class ADVI2:
                 grad_mu = torch.zeros(self.advi_dim)
                 grad_log_std = torch.zeros(self.advi_dim)
                 batch = x[torch.randint(0, x.size(0), (self.batch_size,))]
-                for i in range(self.num_samples):
-                    sample = torch.randn(self.advi_dim)
-                    commun_grad = self.grad_p_invT_logdet(batch, sample, len(x))
-                    commun_grad.requires_grad = False
-                    grad_mu += commun_grad
-                    if self.mode == "meanfield":
-                        diag_exp = torch.diag(torch.exp(self.model_params.vparams[1]))
-                        # print("Diag exp 1", diag_exp)
-                        grad_log_std_tmp = torch.mm((commun_grad * sample).view(1, self.advi_dim), diag_exp) + 1
-                        grad_log_std_tmp = grad_log_std_tmp.view(self.advi_dim)
-                        grad_log_std += grad_log_std_tmp
+                # for i in range(self.num_samples):
+                #     sample = torch.randn(self.advi_dim)
+                    # commun_grad = self.grad_p_invT_logdet(batch, sample, len(x))
+                    # commun_grad.requires_grad = False
+                    # grad_mu += commun_grad
+                    # if self.mode == "meanfield":
+                    #     diag_exp = torch.diag(torch.exp(self.model_params.vparams[1]))
+                    #     # print("Diag exp 1", diag_exp)
+                    #     grad_log_std_tmp = torch.mm((commun_grad * sample).view(1, self.advi_dim), diag_exp) + 1
+                    #     grad_log_std_tmp = grad_log_std_tmp.view(self.advi_dim)
+                    #     grad_log_std += grad_log_std_tmp
+                optimizer.zero_grad()
+                elbo = self.compute_elbo(batch, x.shape[0])
+                loss = -elbo
+                loss.backward()
+                self.model_params.vparams.grad.clamp_(-10, 10)
+                optimizer.step()
 
-                # Average the gradients
-                grad_mu /= self.num_samples
-                grad_log_std /= self.num_samples
-                grad_mu.requires_grad = False
-                grad_log_std.requires_grad = False
+                # # Average the gradients
+                # grad_mu /= self.num_samples
+                # grad_log_std /= self.num_samples
+                # grad_mu.requires_grad = False
+                # grad_log_std.requires_grad = False
 
-                grad_mus.append(grad_mu)
-                if self.mode == "meanfield":
-                    grad_log_stds.append(grad_log_std)
+                # grad_mus.append(grad_mu)
+                # if self.mode == "meanfield":
+                #     grad_log_stds.append(grad_log_std)
 
-                # Update the parameters
-                self.update_params(grad_mu, grad_log_std, method)
+                # # Update the parameters
+                # self.update_params(grad_mu, grad_log_std, method)
 
             # Compute the ELBO
             try:
-                elbo = self.compute_elbo(x)
+                with torch.no_grad():
+                    elbo = self.compute_elbo(x, x.shape[0])
+                #elbo = self.compute_elbo(x)
             except ValueError:
                 elbo = -np.inf
 
