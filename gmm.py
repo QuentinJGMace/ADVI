@@ -35,17 +35,6 @@ class GMM(nn.Module):
         self.dim_parameters = {"p": self.K, "mu": self.d * self.K, "log_sigma": self.d * self.K}
         # Key_pos is now ununsed but it keeps the model variables that are supposed to be positive
         self.key_pos = ["log_sigma"]
-
-    def dist(self, p, mu, sigma):
-        """Returns the distribution of the model"""
-
-        try:
-            return GaussianMixtureModel(p, mu.view(self.K,self.d), sigma.view(self.K,self.d))
-        except:
-            print("p", p)
-            print("mu", mu)
-            print("var", sigma)
-            1/0
     
     def rsample(self, n, p, mu, sigma):
         """Samples n points from the distribution"""
@@ -107,26 +96,27 @@ class GMM(nn.Module):
         p = theta[:self.K]
         mu = theta[self.K:self.K+self.K*self.d].view(self.K,self.d)
         sigma = theta[self.K+self.K*self.d:self.K+2*self.K*self.d].view(self.K,self.d)
-
         assert(sigma > 0.).all() # Debugging
 
         # Sums (and scales for batch learning) the log probabilities of each point
         sum = 0.
         for i in range(x.shape[0]):
-            prob = np.zeros(self.K)
+            l_prob = torch.zeros(self.K)
             for k in range(self.K):
-                prob[k] = p[k] * Normal(mu[k], sigma[k]).log_prob(x[i]).exp().prod()  
-            sum += torch.logsumexp(torch.Tensor(prob), 0)
+                l_prob[k] = torch.log(p[k]) + Normal(mu[k], sigma[k]).log_prob(x[i]).sum()
+            sum = sum + torch.logsumexp(torch.Tensor(l_prob), 0)
 
         sum = sum*full_data_size/x.shape[0]
 
-        print(f"sum: {sum}")
-        sum += 0.01*Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()
-        print(f"Normal prior: {0.01*Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()}")
-        sum += 0.01*Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)
-        print(f"Dirichlet prior: {0.01*Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)}")
-        sum += 1*LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()
-        print(f"LogNormal prior: {0.01*LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()}")
+        # print(sum.requires_grad)
+
+        # print(f"sum: {sum}")
+        sum += Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()
+        # print(f"Normal prior: {0.01*Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()}")
+        sum += Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)
+        # print(f"Dirichlet prior: {0.01*Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)}")
+        sum += LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()
+        # print(f"LogNormal prior: {0.01*LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()}")
 
         return sum
    
