@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
-from torch.distributions import Normal, Gamma, MixtureSameFamily
+from torch.distributions import Normal, LogNormal, Dirichlet
 import numpy as np
 import torch
 from torch.distributions.distribution import Distribution
@@ -13,10 +13,10 @@ from pdb import set_trace
 
 class GMM(nn.Module):
     """
-    Class for a PPCA model
+    Class for a GMM
     """
 
-    def __init__(self, D, K):
+    def __init__(self, D, K, alpha_0 = 1000):
         """
         D: int, data dimension
         K: int, number of gaussians
@@ -24,6 +24,7 @@ class GMM(nn.Module):
         super(GMM, self).__init__()
         self.K = K # latent dimension
         self.d = D # data dimension
+        self.alpha_0 = alpha_0 # Dirichlet prior for the weights
 
         self.eps = 1e-6
 
@@ -48,11 +49,26 @@ class GMM(nn.Module):
     
     def rsample(self, n, p, mu, sigma):
         """Samples n points from the distribution"""
-        return self.dist(p, mu, sigma).rsample([n])
+        shape = n
+        eps = _standard_normal(shape*self.d, dtype=torch.float32, device="cpu").view(shape, self.d)
+        
+        # Calculate the mixture component indices based on the weights
+        mixture_indices = Categorical(p).sample((shape,))
+        
+        # Select the means corresponding to the mixture component indices
+        selected_means = mu[mixture_indices]
+        selected_variances = sigma[mixture_indices]
+        
+        # Generate random samples by adding noise to the selected means
+        samples = selected_means + eps * selected_variances
+        
+        return samples
     
     def theta_from_zeta(self, zeta:torch.Tensor):
         """Returns the model parameters from the tensor zeta (applies T^-1)"""
-        p = torch.nn.functional.softmax(zeta[:self.K], dim=0)
+        zeta_p = zeta[:self.K]
+        exp_sum = zeta_p.exp().sum() 
+        p = zeta_p.exp() / exp_sum
         mu = zeta[self.K:self.K+self.K*self.d]
         sigma = torch.exp(zeta[self.K+self.K*self.d:self.K+2*self.K*self.d])
 
@@ -97,57 +113,20 @@ class GMM(nn.Module):
         # Sums (and scales for batch learning) the log probabilities of each point
         sum = 0.
         for i in range(x.shape[0]):
-            sum += self.dist(p, mu, sigma).log_prob(x[i])
-        return sum*full_data_size/x.shape[0]
-    
+            prob = np.zeros(self.K)
+            for k in range(self.K):
+                prob[k] = p[k] * Normal(mu[k], sigma[k]).log_prob(x[i]).exp().prod()  
+            sum += torch.logsumexp(torch.Tensor(prob), 0)
 
-class GaussianMixtureModel():
+        sum = sum*full_data_size/x.shape[0]
 
-    def __init__(self,
-                 weights,
-                 means,
-                 sigmas):
-        self._weights = weights
-        self._means = means
-        self._sigmas = sigmas
+        print(f"sum: {sum}")
+        sum += 0.01*Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()
+        print(f"Normal prior: {0.01*Normal(loc=0, scale=1).log_prob(torch.Tensor(mu)).sum()}")
+        sum += 0.01*Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)
+        print(f"Dirichlet prior: {0.01*Dirichlet(concentration=torch.ones(self.K)*self.alpha_0).log_prob(p)}")
+        sum += 1*LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()
+        print(f"LogNormal prior: {0.01*LogNormal(loc=0, scale=1).log_prob(torch.Tensor(sigma)).sum()}")
 
-        # Check the input size matches
-        K, d = self._means.shape
-        K_sigma, d_sigma = self._sigmas.shape
-        K_weights = self._weights.shape[0]
-
-        if d != d_sigma or K != K_sigma or K != K_weights:
-            raise ValueError("The input sizes do not match."
-                             " Number of gaussians should match: {K} for means,"
-                             " {K_sigma} for sigmas and {K_weights} for weights."
-                             " Number of dimensions should match: {d} for means"
-                             " and {d_sigma} for sigmas.")
-
-        self._num_component = K
-        self._dimension = d
-
-    def log_prob(self, x):
-        for k in range(self._num_component):
-            component_distribution = Normal(self._means[k], self._sigmas[k])
-            if k == 0:
-                prob = self._weights[k] * component_distribution.log_prob(x).exp().prod()
-            else:
-                prob += self._weights[k] * component_distribution.log_prob(x).exp().prod()   
-        return prob.log() 
-
-    def rsample(self, sample_shape=torch.Size()):
-        shape = sample_shape[0]
-        eps = _standard_normal(shape*self._dimension).view(shape, self._dimension)
-        
-        # Calculate the mixture component indices based on the weights
-        mixture_indices = Categorical(self._weights).sample((shape,))
-        
-        # Select the means corresponding to the mixture component indices
-        selected_means = self._means[mixture_indices]
-        selected_variances = self._sigmas[mixture_indices]
-        
-        # Generate random samples by adding noise to the selected means
-        samples = selected_means + eps * selected_variances
-        
-        return samples
-        
+        return sum
+   
