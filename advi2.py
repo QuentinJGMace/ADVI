@@ -127,7 +127,12 @@ class ADVI2:
         for i in range(self.num_samples):
             sample = torch.randn(self.advi_dim)
             zeta = self.zeta_from_sample(sample)  
+            print(f"Zeta: {zeta}")
             theta = self.model.theta_from_zeta(zeta)
+            print(f"Theta: {theta}")
+            print(f"Log prob: {self.model.log_prob(batch, theta, full_data_size)}")
+            print(f"Log det: {self.model.log_det(zeta)}")
+            print(f"Entropy: {self.entropy()}")
             elbo += self.model.log_prob(batch, theta, full_data_size) + self.model.log_det(zeta) + self.entropy()
 
         elbo /= self.num_samples
@@ -181,6 +186,7 @@ class ADVI2:
                 optimizer.zero_grad()
                 elbo = self.compute_elbo(batch, x.shape[0])
                 loss = -elbo
+                print(f"Loss: {loss}")
                 loss.backward()
                 self.model_params.vparams.grad.clamp_(-10, 10)
                 optimizer.step()
