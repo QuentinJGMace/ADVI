@@ -1,26 +1,24 @@
-# Structure du repo
+# Introduction
+This repository is the code corresponding to our project on ADVI (Automatic Differentiation Variational Inference) optimization method made for the MVA class : graphical models, discrete inference and learning
 
-- advi.py : ne marche pas, outdated
-- advi2.py : version qui marche
-    - Contient 2 classes : ModelParam2, ADVI2
-    - ModelParam2 : sert à gérer les paramètres qu'apprend l'advi (peut les sampler, retrouner leur distribution et contient leur moyenne + std)
-    - ADVI2 : algo en lui même, méthode fit qui permet de fit un modèle à des données
-- ppca.py : Contient les modèles pour la ppca (**PPCA_model, PPCA_with_ARD_model**), tous les paramètres et les calculs importants pour ADVI (log_vraissemblance en particulier)
-- test.ipynb, test.py : fichiers de test avec un petit jeu de donnée en 2D pour voir si ça fonctionne.
-- data_exploration.ipynb : Fichier ou j'ai lu et mis en forme les données sur les taxis
+# How to reproduce experiments
+- download the porto taxi trajectories dataset available <a href="https://archive.ics.uci.edu/dataset/339/taxi+service+trajectory+prediction+challenge+ecml+pkdd+2015">here</a>
+- replace FILE_NAME in porto_preprocess.py by the train.csv file path of the taxi dataset
+- execute porto_preprocess.py (it can take a while as it goes through the entire dataset)
+- In the taxi.ipynb notebook replace array_path by the path of the array created by porto_preprocess.py
+- You can go through the notebook (we advise not to execute the notebook as it takes quite a long time to run)
 
-# Ajout d'un nouveau modèle
-Le modèle doit avoir les même méthodes que dans le fichier ppca.py. C'est à dire :
-## Attributs
-- self.num_parameters : la dimension totale des paramètres (i.e mean + sigma en 2 dimension --> num_parameters = 4)
-- self.named_params (en vrai pas besoin) : des clés pour chacun des paramètres
-- self.dim_parameters : dictionnaire {clé de paramètre : dimension du paramètre}
-- self.key_pos : les clés des paramètres qui sont passés au log (typiquement std)
+# Repository's structure
 
-## Méthodes
-- dist(\*\*params) : retourne la distribution du modèle selon les paramètres données
-- rsample(n, \*\*params) : sample n points selon self.dist(\*\*params)
-- theta_from_zeta(zeta) : retourne le vecteur de paramètre $\theta = T^{-1}(\zeta)$
-- grad_inv_T: OSEF, plus utilisée, c'est calculé par pytorch
-- log_det(zeta) : retourne $log(|det(J_{T^{-1}}(\zeta))|)$
-- log_prob(x, theta, full_data_size) : retourne la log vraissemblance des données selon le paramètre theta. Full data size est la taille totale du jeu de données si x ne représente qu'un sous ensemble.
+- advi.py : File containing the ADVI optimization object
+- ppca.py : File containing probabilistic PCA implementation (actually there are 3 different versions, not all equivalent)
+- gmm.py : File containing Gaussian Mixture model implementation
+- porto_preprocess.py : File for preprocessing the taxi dataset
+
+- toy_data.ipynb : Notebook for our experimentations on simple 2D data
+- taxis.ipynb : Notebook for our experiment on the taxi_dataset
+
+# Contributors
+- Gabriel Ben Zenou
+- Quentin Macé
+- Alexandre Selvestrel
