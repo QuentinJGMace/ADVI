@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
-from torch.distributions import Normal, Gamma, MultivariateNormal
+from torch.distributions import Normal, Gamma, MultivariateNormal, Independent
 import numpy as np
 
 class PPCA_model(nn.Module):
@@ -74,7 +74,7 @@ class PPCA_model(nn.Module):
         """Returns the log determinant of the jacobian of the inverse transformation"""
         return torch.sum(zeta[self.d*self.K+self.d:self.d*self.K+2*self.d])
     
-    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int):
+    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int, indexes=None):
         """Returns the log probability of x under the distribution of the model
         
         Args:
@@ -92,6 +92,8 @@ class PPCA_model(nn.Module):
         sum = 0.
         for i in range(x.shape[0]):
             sum += self.dist(W, mu, sigma).log_prob(x[i]).sum()
+
+        
         return sum*full_data_size/x.shape[0]
         
 
@@ -163,7 +165,7 @@ class PPCA_with_ARD_model(nn.Module):
         """Returns the log determinant of the jacobian of the inverse transformation"""
         return torch.sum(zeta[self.d*self.K+self.d:self.d*self.K+2*self.d]) + torch.sum(zeta[self.d*self.K+2*self.d:])
     
-    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int):
+    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int, indexes=None):
         """Returns the log probability of x under the distribution of the model"""
         # gets the model parameters from the tensor params
         W = theta[:self.d*self.K].view(self.d, self.K)
@@ -178,5 +180,82 @@ class PPCA_with_ARD_model(nn.Module):
         sum = 0.
         for i in range(x.shape[0]):
             sum += self.dist(W, mu, sigma, alpha).log_prob(x[i]).sum()
-        return sum*full_data_size/x.shape[0]
-        
+
+        sum_prior = 0.
+        # Normal prior for W
+        sum_prior += Normal(torch.zeros(self.d*self.K), torch.ones(self.d*self.K)).log_prob(W.view(self.d*self.K)).sum()
+        # LOGnormal prior for sigma
+        sum_prior += Normal(0., 1.).log_prob(torch.log(sigma)).sum()
+        # InvGamma prior for alpha
+        sum_prior += Gamma(1., 1.).log_prob(1./alpha).sum()
+        return (sum*full_data_size/x.shape[0]) + sum_prior
+    
+
+class PPCA_ARD_True(nn.Module):
+    
+    def __init__(self, n, D, K):
+        super(PPCA_ARD_True, self).__init__()
+        self.n = n # number of data points
+        self.K = K # latent dimension
+        self.d = D # data dimension
+
+        self.eps = 1e-6
+
+        # Variables used for ADVI to know the dimensionality of the optimization problem
+        self.num_parameters = self.K*self.n + self.d * self.K + 1 + self.K # z, W, log_sigma, log_alpha
+
+        self.named_params = ["z", "W", "log_sigma", "log_alpha"]
+        self.dim_parameters = {"z": self.K*self.n, "W": self.d*self.K, "log_sigma": 1, "log_alpha": self.K}
+        # Key_pos is now ununsed but it keeps the model variables that are supposed to be positive
+        self.key_pos = ["log_sigma", "log_alpha"]
+
+    def rsample(self, n, z, W, sigma, alpha):
+        """Samples n points from the distribution"""
+        # W_multiplied = W * alpha * sigma
+        W_multiplied = W
+        return Normal(torch.mm(W_multiplied, z), sigma).rsample([n])
+
+    def theta_from_zeta(self, zeta:torch.Tensor):
+        """Returns the model parameters from the tensor zeta"""
+        z = zeta[:self.K*self.n]
+        W = zeta[self.K*self.n:self.K*self.n+self.d*self.K]
+        sigma = torch.exp(zeta[self.K*self.n+self.d*self.K:self.K*self.n+self.d*self.K+1])
+        alpha = torch.exp(zeta[self.K*self.n+self.d*self.K+1:])
+
+        assert (sigma > 0.).all(), "Sigma should be positive"
+        assert (alpha >0.).all(), "Alpha should be positive"
+
+        # concatenates the paremeters and returns them as one single tensor
+        return torch.cat([z, W, sigma, alpha])
+    
+    def log_det(self, zeta:torch.Tensor):
+        """Returns the log determinant of the jacobian of the inverse transformation"""
+        return torch.sum(zeta[self.K*self.n+self.d*self.K:self.K*self.n+self.d*self.K+1]) + torch.sum(zeta[self.K*self.n+self.d*self.K+1:])
+    
+    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int, indexes:list):
+        z = theta[:self.K*self.n].view(self.K, self.n)
+        W = theta[self.K*self.n:self.K*self.n+self.d*self.K].view(self.d, self.K)
+        sigma = theta[self.K*self.n+self.d*self.K:self.K*self.n+self.d*self.K+1]
+        alpha = theta[self.K*self.n+self.d*self.K+1:]
+        # W_multiplied = W * alpha * sigma
+        W_multiplied = W
+
+        assert(sigma > 0.).all()
+        assert (alpha > 0.).all()
+        assert x.shape[0] == len(indexes)
+        sum = 0.
+        for i in range(x.shape[0]):
+            mean = torch.mm(W_multiplied, z[:,indexes[i]].view(self.K, 1))
+            sum += Normal(mean, sigma).log_prob(x[i]).sum()
+
+        sum_prior = 0.
+        # Normal prior for z
+        sum_prior += Normal(torch.zeros(self.n*self.K), torch.ones(self.n*self.K)).log_prob(z.view(self.n*self.K)).sum()
+        # Normal prior for W
+        for i in range(self.d):
+            sum_prior += Independent(Normal(torch.zeros(self.K), sigma * alpha), 1).log_prob(W[i]).sum()
+        # LOGnormal prior for sigma
+        sum_prior += Normal(0., 1.).log_prob(torch.log(sigma)).sum()
+        # InvGamma prior for alpha
+        sum_prior += Gamma(1., 1.).log_prob(1./alpha).sum()
+        return sum*full_data_size/x.shape[0] + sum_prior

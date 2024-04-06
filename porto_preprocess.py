@@ -4,9 +4,9 @@ from pdb import set_trace
 from tqdm import tqdm
 import pandas as pd
 
-FILE_NAME = 'data/test.csv'
+FILE_NAME = 'data/taxi+service+trajectory+prediction+challenge+ecml+pkdd+2015/train.csv/train.csv'
 
-data_df = pd.read_csv('FILE_NAME')
+data_df = pd.read_csv(FILE_NAME)
 print(data_df.columns)
 
 target_shape = 50

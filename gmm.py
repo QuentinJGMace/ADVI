@@ -85,7 +85,7 @@ class GMM(nn.Module):
         log_det_jacobian_p = self.compute_log_det_jacobian_p(zeta[:self.K])
         return sigmas_sum + log_det_jacobian_p
     
-    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int):
+    def log_prob(self, x:torch.Tensor, theta:torch.Tensor, full_data_size:int, batch_indices:list):
         """Returns the log probability of x under the distribution of the model
         
         Args:
